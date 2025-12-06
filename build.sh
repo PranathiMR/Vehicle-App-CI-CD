@@ -154,4 +154,21 @@ cmake --no-warn-unused-cli \
   -DBUILD_TOOLS_PATH:STRING="${BUILD_TOOLS_PATH}" \
   ${XCOMPILE_TOOLCHAIN_FILE} ..
 cmake --build . --config ${BUILD_VARIANT} --target ${BUILD_TARGET} -- 
+
+mkdir -p scripts
+
+cat > scripts/build.sh << 'EOF'
+#!/usr/bin/env bash
+set -e
+
+echo ">>> [build.sh] Installing Conan dependencies"
+conan install . --build=missing
+
+echo ">>> [build.sh] Configuring CMake"
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+echo ">>> [build.sh] Building project"
+cmake --build build -- -j"$(nproc)"
+EOF
+
 cd ..
