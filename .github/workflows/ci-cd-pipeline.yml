@@ -1,0 +1,106 @@
+cat > .github/workflows/ci-cd-pipeline.yml << 'EOF'
+name: Vehicle App - CI Pipeline (Phase 1)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------
+      # CHECKOUT CODE
+      # -----------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # -----------------------------
+      # INSTALL SYSTEM DEPENDENCIES
+      # -----------------------------
+      - name: Install system packages
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            python3-pip \
+            clang-tidy \
+            cppcheck \
+            protobuf-compiler \
+            grpc-proto \
+            grpc-plugins \
+            wget
+
+      # -----------------------------
+      # INSTALL CONAN 1.x
+      # -----------------------------
+      - name: Install Conan
+        run: |
+          pip3 install --upgrade pip
+          pip3 install "conan==1.60.0"
+          conan --version
+          conan profile new default --detect --force
+          conan profile update settings.compiler.libcxx=libstdc++11 default
+
+      # -----------------------------
+      # STATIC ANALYSIS: CPPCHECK
+      # -----------------------------
+      - name: Run cppcheck
+        run: |
+          echo ">>> Running cppcheck on sdk/ and apps/"
+          cppcheck --enable=all --inconclusive --error-exitcode=1 sdk apps
+
+      # -----------------------------
+      # STATIC ANALYSIS: CLANG-TIDY
+      # -----------------------------
+      - name: Run clang-tidy
+        run: |
+          echo ">>> Configuring CMake for compile_commands.json"
+          cmake -B build
+          echo ">>> Running clang-tidy on C++ sources"
+          clang-tidy -p build $(find sdk apps -name "*.cpp")
+
+      # -----------------------------
+      # BUILD PROJECT
+      # -----------------------------
+      - name: Build SDK + Apps
+        run: |
+          bash build.sh
+
+      # -----------------------------
+      # RUN UNIT TESTS
+      # -----------------------------
+      - name: Run Unit Tests
+        run: |
+          bash .scripts/run_unit_tests.sh
+
+      # -----------------------------
+      # DOCKER BUILD
+      # -----------------------------
+      - name: Build Docker Image
+        run: |
+          echo ">>> Building Docker image 'vehicle-app:latest'"
+          docker build -t vehicle-app:latest .
+
+      # -----------------------------
+      # INSTALL TRIVY
+      # -----------------------------
+      - name: Install Trivy
+        run: |
+          echo ">>> Installing Trivy"
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.3_Linux-64bit.deb
+          sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
+
+      # -----------------------------
+      # TRIVY SCAN
+      # -----------------------------
+      - name: Security Scan with Trivy
+        run: |
+          echo ">>> Scanning Docker image with Trivy"
+          trivy image --exit-code 1 vehicle-app:latest
+EOF
