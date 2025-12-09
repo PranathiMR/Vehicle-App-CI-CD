@@ -1,4 +1,4 @@
-name: Vehicle App - CI Pipeline (Final Corrected)
+name: Vehicle App - CI Pipeline (FINAL FIXED)
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
       uses: actions/checkout@v3
 
     # -----------------------------
-    # SYSTEM DEPENDENCIES
+    # INSTALL SYSTEM DEPENDENCIES
     # -----------------------------
     - name: Install system packages
       run: |
@@ -27,85 +27,73 @@ jobs:
           build-essential \
           cmake \
           ninja-build \
-          python3-pip \
-          python3-dev \
           pkg-config \
+          python3-pip \
           clang-tidy \
           cppcheck \
-          unzip \
-          wget
+          wget \
+          unzip
 
     # -----------------------------
-    # INSTALL protoc 3.19.1 (correct version for Velocitas)
+    # INSTALL PROTOBUF + gRPC COMPILER (CORRECT)
     # -----------------------------
-    - name: Install protoc 3.19.1 + gRPC C++ plugin
+    - name: Install Protobuf + gRPC C++ plugin
       run: |
-        PROTOC_VERSION=3.19.1
-
-        echo "Installing protoc ${PROTOC_VERSION}"
-        wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
-        sudo unzip -o protoc.zip -d /usr/local
-
-        echo "Installing gRPC C++ compiler plugin"
         sudo apt update
-        sudo apt install -y protobuf-compiler-grpc
+        sudo apt install -y \
+          protobuf-compiler \
+          protobuf-compiler-grpc \
+          libgrpc++-dev \
+          libprotobuf-dev \
+          grpc-dev
 
-        echo "Verifying versions:"
+        echo "=== Protobuf & gRPC Versions ==="
         protoc --version
         which grpc_cpp_plugin
 
     # -----------------------------
-    # INSTALL CONAN 1.x + PyYAML FIX
+    # INSTALL CONAN 1.x (FIXED PyYAML)
     # -----------------------------
     - name: Install Conan 1.x
       run: |
         pip3 install --upgrade pip setuptools wheel
-        # PyYAML pinned to avoid Cython build failure on Python 3.12
         pip3 install "PyYAML>=6.0.2"
         pip3 install "conan==1.60.0"
 
         conan --version
-        conan config init
         conan profile new default --detect --force
         conan profile update settings.compiler.libcxx=libstdc++11 default
 
     # -----------------------------
-    # RUN CONAN INSTALL (BEFORE CMAKE)
+    # CONAN INSTALL
     # -----------------------------
-    - name: Run Conan install
+    - name: Run Conan Install
       run: |
         mkdir -p build
         conan install . --install-folder=build --build=missing
 
     # -----------------------------
-    # CONFIGURE CMAKE
+    # CMAKE CONFIGURE & BUILD
     # -----------------------------
-    - name: Configure CMake
+    - name: Configure + Build Project
       run: |
         cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-    # -----------------------------
-    # BUILD PROJECT
-    # -----------------------------
-    - name: Build Vehicle App + SDK
-      run: |
         cmake --build build --config Release
 
     # -----------------------------
-    # STATIC ANALYSIS: clang-tidy
+    # STATIC ANALYSIS: CLANG-TIDY
     # -----------------------------
     - name: Run clang-tidy
       run: |
-        echo "Running clang-tidy..."
+        echo "=== Running clang-tidy ==="
         clang-tidy -p build $(find sdk examples -name "*.cpp") || true
 
     # -----------------------------
-    # STATIC ANALYSIS: cppcheck (FIXED)
-    # Run AFTER build so headers exist
+    # STATIC ANALYSIS: CPPCHECK (AFTER BUILD)
     # -----------------------------
-    - name: Run cppcheck (post-build)
+    - name: Run cppcheck
       run: |
-        echo "Running cppcheck..."
+        echo "=== Running cppcheck after build ==="
         cppcheck \
           --enable=all \
           --inconclusive \
@@ -135,8 +123,8 @@ jobs:
         sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
 
     # -----------------------------
-    # TRIVY SCAN
+    # TRIVY DOCKER SCAN
     # -----------------------------
-    - name: Security Scan with Trivy
+    - name: Scan Docker image with Trivy
       run: |
         trivy image --exit-code 1 vehicle-app:latest
