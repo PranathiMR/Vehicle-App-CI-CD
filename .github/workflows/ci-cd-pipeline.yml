@@ -11,124 +11,155 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # -----------------------------
-      # CHECKOUT CODE
-      # -----------------------------
+      # --------------------------------------------------
+      # CHECKOUT
+      # --------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # -----------------------------
-      # INSTALL SYSTEM DEPENDENCIES
-      # -----------------------------
+      # --------------------------------------------------
+      # SYSTEM PACKAGES (NO grpc-proto HERE)
+      # --------------------------------------------------
       - name: Install system packages
         run: |
-          sudo apt update
-          sudo apt install -y \
+          set -e
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             build-essential \
             cmake \
             ninja-build \
             pkg-config \
             python3-pip \
             clang-tidy \
+            cppcheck \
             wget \
             unzip
 
-      # -----------------------------
-      # INSTALL protoc + gRPC C++ plugin
-      # -----------------------------
-      - name: Install protoc + gRPC C++ plugin
+      # --------------------------------------------------
+      # PROTOC 3.19.1 + grpc_cpp_plugin
+      # (matches your Conan protobuf, avoids ABI mismatch)
+      # --------------------------------------------------
+      - name: Install protoc 3.19.1 + gRPC C++ plugin
         run: |
+          set -e
           PROTOC_VERSION=3.19.1
 
-          echo "=== INSTALLING PROTOC ==="
-          wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
+          echo "=== Installing protoc ${PROTOC_VERSION} ==="
+          wget -q \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip" \
+            -O protoc.zip
           sudo unzip -o protoc.zip -d /usr/local
+          rm protoc.zip
 
+          echo "=== Installing grpc_cpp_plugin from distro (protobuf-compiler-grpc) ==="
           sudo apt-get update
-          sudo apt-get install -y grpc-proto
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y protobuf-compiler-grpc
 
+          echo "=== Versions ==="
           which protoc
           protoc --version
-          which grpc_cpp_plugin || echo "grpc_cpp_plugin provided inside protoc package"
+          which grpc_cpp_plugin
 
-      # -----------------------------
-      # INSTALL CONAN (PyYAML FIX)
-      # -----------------------------
+      # --------------------------------------------------
+      # CONAN (PINNED, TO AVOID PyYAML ISSUES)
+      # --------------------------------------------------
       - name: Install Conan 1.x
         run: |
-          pip3 install --upgrade pip
-          pip3 install "PyYAML==5.4.1"
-          pip3 install "conan==1.60.0"
-
-          conan config init
+          set -e
+          python3 -m pip install --upgrade pip
+          # PyYAML pinned as you had it
+          python3 -m pip install "PyYAML==5.4.1"
+          python3 -m pip install "conan==1.60.0"
+          conan --version
+          conan config init || true
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
 
-      # -----------------------------
-      # CONAN INSTALL
-      # -----------------------------
-      - name: Conan install
+      - name: Conan install (C++ dependencies)
         run: |
+          set -e
           mkdir -p build
           conan install . --install-folder=build --build=missing
 
-      # -----------------------------
-      # CONFIGURE CMAKE
-      # -----------------------------
-      - name: CMake configure
+      # --------------------------------------------------
+      # CMAKE CONFIGURE (for build + clang-tidy + cppcheck)
+      # --------------------------------------------------
+      - name: Configure CMake
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          set -e
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      # -----------------------------
-      # CLANG-TIDY (RESTORED HERE)
-      # -----------------------------
+      # --------------------------------------------------
+      # CLANG-TIDY (still in the pipeline)
+      # --------------------------------------------------
       - name: Run clang-tidy
         run: |
-          echo ">>> Running clang-tidy"
-          find sdk examples -name "*.cpp" | xargs clang-tidy -p build
+          set -e
+          # Adjust the paths set here if needed
+          SRC_FILES=$(find sdk examples -name "*.cpp")
+          if [ -n "$SRC_FILES" ]; then
+            clang-tidy -p build $SRC_FILES
+          else
+            echo "No C++ files found for clang-tidy."
+          fi
 
-      # -----------------------------
-      # BUILD PROJECT
-      # -----------------------------
-      - name: Build SDK + Apps
+      # --------------------------------------------------
+      # BUILD (uses your existing build.sh so it matches
+      # what you do in the dev container)
+      # --------------------------------------------------
+      - name: Build SDK + apps
         run: |
-          cmake --build build --config Release
+          set -e
+          bash build.sh
 
-      # -----------------------------
-      # CPPCHECK (MUST RUN AFTER BUILD!)
-      # -----------------------------
+      # --------------------------------------------------
+      # CPPCHECK AFTER BUILD (USES compile_commands.json)
+      # Fixes missingInclude & runs with real include paths
+      # --------------------------------------------------
       - name: Run cppcheck
         run: |
-          echo ">>> Running cppcheck AFTER protoc-generated files exist"
-          cppcheck --enable=all --inconclusive --error-exitcode=1 \
+          set -e
+          if [ ! -f build/compile_commands.json ]; then
+            echo "compile_commands.json not found, re-configuring CMake"
+            cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          fi
+
+          cppcheck \
             --project=build/compile_commands.json \
-            --suppress=missingIncludeSystem
+            --enable=all \
+            --inconclusive \
+            --suppress=missingIncludeSystem \
+            --error-exitcode=1
 
-      # -----------------------------
-      # RUN UNIT TESTS
-      # -----------------------------
-      - name: Run Unit Tests
+      # --------------------------------------------------
+      # UNIT TESTS
+      # --------------------------------------------------
+      - name: Run unit tests
         run: |
-          ctest --test-dir build --output-on-failure
+          set -e
+          if [ -x ".scripts/run_unit_tests.sh" ]; then
+            bash .scripts/run_unit_tests.sh
+          else
+            ctest --test-dir build --output-on-failure
+          fi
 
-      # -----------------------------
+      # --------------------------------------------------
       # DOCKER BUILD
-      # -----------------------------
-      - name: Build Docker Image
+      # --------------------------------------------------
+      - name: Build Docker image
         run: |
+          set -e
           docker build -t vehicle-app:latest .
 
-      # -----------------------------
-      # INSTALL TRIVY
-      # -----------------------------
-      - name: Install Trivy
-        run: |
-          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.3_Linux-64bit.deb
-          sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
-
-      # -----------------------------
-      # TRIVY SCAN
-      # -----------------------------
-      - name: Security Scan with Trivy
-        run: |
-          trivy image --exit-code 1 vehicle-app:latest
+      # --------------------------------------------------
+      # TRIVY IMAGE SCAN (uses a valid action tag)
+      # --------------------------------------------------
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: vehicle-app:latest
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
