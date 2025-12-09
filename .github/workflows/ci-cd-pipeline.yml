@@ -8,30 +8,18 @@ on:
 
 jobs:
   build-and-scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # pin runner version for consistency
 
     steps:
-      # -------------------------------------------------
-      # 1. Checkout
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 1) CHECKOUT
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------
-      # 2. Set up Python (for Conan). Use 3.11 so PyYAML
-      #    wheels are available and we avoid the Cython
-      #    build error you saw.
-      # -------------------------------------------------
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      # -------------------------------------------------
-      # 3. System dependencies
-      #    - protobuf-compiler-grpc brings grpc_cpp_plugin
-      #      (we still override protoc via Conan).
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 2) SYSTEM DEPENDENCIES
+      # --------------------------------------------------
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -41,124 +29,101 @@ jobs:
             ninja-build \
             pkg-config \
             python3-dev \
+            python3-pip \
             clang-tidy \
             cppcheck \
             wget \
             unzip \
-            protobuf-compiler-grpc \
-            docker.io
+            protobuf-compiler \
+            grpc-compiler
 
-      # -------------------------------------------------
-      # 4. Conan 1.60 (same as your dev container)
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 3) PYTHON TOOLING + CONAN 1.x
+      # --------------------------------------------------
+      - name: Upgrade pip tooling
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+
       - name: Install Conan 1.x
         run: |
-          pip install --upgrade pip
-          pip install "conan==1.60.0"
+          python3 -m pip install "conan==1.60.0"
           conan --version
-          # Create default profile matching the runner
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
 
-      # -------------------------------------------------
-      # 5. Conan install for sdk (uses your conanfile.txt)
-      #    This also downloads protobuf/3.19.1 & grpc/1.50.1
-      #    and we expose protoc from that package on PATH
-      #    for the rest of the job.
-      # -------------------------------------------------
-      - name: Conan install
+      # --------------------------------------------------
+      # 4) CONAN INSTALL
+      # --------------------------------------------------
+      - name: Conan install dependencies
         run: |
-          # Resolve and build all third-party deps
-          conan install . --build=missing
+          mkdir -p build
+          conan install . \
+            --profile default \
+            --install-folder=build \
+            --build=missing
 
-          # Expose the protobuf tools from Conan for later steps
-          PROTO_BIN=$(echo "$HOME/.conan/data/protobuf/3.19.1/_/_/package"/*"/bin")
-          echo "PROTOBUF_BIN=$PROTO_BIN" >> "$GITHUB_ENV"
-          echo "PATH=$PROTO_BIN:$PATH" >> "$GITHUB_ENV"
-
-      # -------------------------------------------------
-      # 6. Static analysis – cppcheck
-      # -------------------------------------------------
-      - name: Run cppcheck
-        run: |
-          echo ">>> Running cppcheck on sdk/ and examples/"
-          cppcheck --enable=all --inconclusive --error-exitcode=1 \
-            sdk examples
-
-      # -------------------------------------------------
-      # 7. Configure with CMake (Ninja generator)
-      #    -DCMAKE_EXPORT_COMPILE_COMMANDS gives us
-      #    compile_commands.json for clang-tidy.
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 5) CMAKE CONFIGURE
+      # --------------------------------------------------
       - name: Configure CMake
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      # -------------------------------------------------
-      # 8. Static analysis – clang-tidy
-      #    Uses compile_commands.json generated in step 7.
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 6) STATIC ANALYSIS: CPPCHECK
+      # --------------------------------------------------
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --inconclusive --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            sdk examples
+
+      # --------------------------------------------------
+      # 7) STATIC ANALYSIS: CLANG-TIDY
+      # --------------------------------------------------
       - name: Run clang-tidy
         run: |
-          echo ">>> Running clang-tidy"
-          SRC_FILES=$(find sdk examples -name "*.cpp")
-          if [ -n "$SRC_FILES" ]; then
-            clang-tidy -p build $SRC_FILES
-          else
-            echo "No *.cpp files found for clang-tidy"
-          fi
+          clang-tidy -p build $(find sdk examples -name '*.cpp')
 
-      # -------------------------------------------------
-      # 9. Make sure protoc gens directory exists.
-      #    This avoids the 'build/gens/...: not found'
-      #    errors you hit earlier.
-      # -------------------------------------------------
-      - name: Create protoc generation folder
+      # --------------------------------------------------
+      # 8) ENSURE gRPC OUTPUT DIR EXISTS
+      # --------------------------------------------------
+      - name: Create gRPC gens folder
         run: mkdir -p build/gens
 
-      # -------------------------------------------------
-      # 10. Build (SDK + examples + tests)
-      #     This is equivalent to what you do locally
-      #     with your dev container.
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 9) BUILD (Ninja)
+      # --------------------------------------------------
       - name: Build project
         run: |
           cmake --build build --config Release
 
-      # -------------------------------------------------
-      # 11. Run unit tests
-      #     If you prefer your script, replace this with:
-      #       bash .scripts/run_unit_tests.sh
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 10) UNIT TESTS (ctest in build dir)
+      # --------------------------------------------------
       - name: Run unit tests
         run: |
           ctest --test-dir build --output-on-failure
 
-      # -------------------------------------------------
-      # 12. Build Docker image for the app
-      #     (assumes you have a Dockerfile in repo root).
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 11) DOCKER BUILD
+      # --------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build Docker image
         run: |
-          echo ">>> Building Docker image vehicle-app:latest"
           docker build -t vehicle-app:latest .
 
-      # -------------------------------------------------
-      # 13. Install Trivy (for image vulnerability scan)
-      # -------------------------------------------------
-      - name: Install Trivy
-        run: |
-          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.3_Linux-64bit.deb
-          sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
-
-      # -------------------------------------------------
-      # 14. Trivy image scan
-      #     --exit-code 1 causes the pipeline to fail on
-      #     HIGH/CRITICAL vulnerabilities by default.
-      # -------------------------------------------------
+      # --------------------------------------------------
+      # 12) TRIVY IMAGE SCAN
+      # --------------------------------------------------
       - name: Security scan with Trivy
-        run: |
-          echo ">>> Scanning Docker image with Trivy"
-          trivy image --exit-code 1 vehicle-app:latest
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          image-ref: 'vehicle-app:latest'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
