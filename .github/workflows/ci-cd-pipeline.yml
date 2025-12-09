@@ -44,12 +44,12 @@ jobs:
           protobuf-compiler \
           protobuf-compiler-grpc \
           libgrpc++-dev \
-          libprotobuf-dev \
-          grpc-dev
+          libprotobuf-dev
 
-        echo "=== Protobuf & gRPC Versions ==="
+        echo "=== Versions ==="
         protoc --version
         which grpc_cpp_plugin
+
 
     # -----------------------------
     # INSTALL CONAN 1.x (FIXED PyYAML)
