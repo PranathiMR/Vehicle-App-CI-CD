@@ -1,4 +1,3 @@
-cat > .github/workflows/ci-cd-pipeline.yml << 'EOF'
 name: Vehicle App - CI Pipeline (Phase 1)
 
 on:
@@ -27,14 +26,37 @@ jobs:
           sudo apt install -y \
             build-essential \
             cmake \
+            ninja-build \
             pkg-config \
             python3-pip \
             clang-tidy \
             cppcheck \
-            protobuf-compiler \
-            grpc-proto \
-            grpc-plugins \
-            wget
+            wget \
+            unzip
+
+      # -----------------------------
+      # INSTALL PROTOBUF & gRPC C++ COMPILER
+      # -----------------------------
+      - name: Install protoc + grpc_cpp_plugin
+        run: |
+          PROTOC_VERSION=3.21.12
+          GRPC_VERSION=1.50.1
+
+          echo ">>> Installing protoc"
+          wget https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip
+          unzip protoc-$PROTOC_VERSION-linux-x86_64.zip -d protoc
+          sudo mv protoc/bin/* /usr/local/bin/
+          sudo mv protoc/include/* /usr/local/include/
+
+          echo ">>> Installing gRPC C++ tools"
+          wget https://github.com/grpc/grpc/releases/download/v$GRPC_VERSION/grpc-$GRPC_VERSION.tar.gz
+          tar -xzf grpc-$GRPC_VERSION.tar.gz
+          cd grpc-$GRPC_VERSION
+          mkdir -p cmake/build && cd cmake/build
+          cmake ../.. -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF
+          make -j4
+          sudo make install
+          sudo ldconfig
 
       # -----------------------------
       # INSTALL CONAN 1.x
@@ -43,48 +65,57 @@ jobs:
         run: |
           pip3 install --upgrade pip
           pip3 install "conan==1.60.0"
-          conan --version
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
+
+      # -----------------------------
+      # CONAN INSTALL
+      # -----------------------------
+      - name: Run Conan Install
+        run: |
+          mkdir -p build
+          conan install . --install-folder=build --build=missing
 
       # -----------------------------
       # STATIC ANALYSIS: CPPCHECK
       # -----------------------------
       - name: Run cppcheck
         run: |
-          echo ">>> Running cppcheck on sdk/ and apps/"
-          cppcheck --enable=all --inconclusive --error-exitcode=1 sdk apps
+          cppcheck --enable=all --inconclusive --error-exitcode=1 sdk examples
 
       # -----------------------------
       # STATIC ANALYSIS: CLANG-TIDY
       # -----------------------------
       - name: Run clang-tidy
         run: |
-          echo ">>> Configuring CMake for compile_commands.json"
-          cmake -B build
-          echo ">>> Running clang-tidy on C++ sources"
-          clang-tidy -p build $(find sdk apps -name "*.cpp")
+          cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          clang-tidy -p build $(find sdk examples -name "*.cpp")
+
+      # -----------------------------
+      # PRE-CREATE gRPC gens FOLDER (IMPORTANT FIX)
+      # -----------------------------
+      - name: Create protoc generation folder
+        run: mkdir -p build/gens
 
       # -----------------------------
       # BUILD PROJECT
       # -----------------------------
       - name: Build SDK + Apps
         run: |
-          bash build.sh
+          cmake --build build --config Release
 
       # -----------------------------
       # RUN UNIT TESTS
       # -----------------------------
       - name: Run Unit Tests
         run: |
-          bash .scripts/run_unit_tests.sh
+          ctest --test-dir build --output-on-failure
 
       # -----------------------------
       # DOCKER BUILD
       # -----------------------------
       - name: Build Docker Image
         run: |
-          echo ">>> Building Docker image 'vehicle-app:latest'"
           docker build -t vehicle-app:latest .
 
       # -----------------------------
@@ -92,7 +123,6 @@ jobs:
       # -----------------------------
       - name: Install Trivy
         run: |
-          echo ">>> Installing Trivy"
           wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.3_Linux-64bit.deb
           sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
 
@@ -101,6 +131,4 @@ jobs:
       # -----------------------------
       - name: Security Scan with Trivy
         run: |
-          echo ">>> Scanning Docker image with Trivy"
           trivy image --exit-code 1 vehicle-app:latest
-EOF
