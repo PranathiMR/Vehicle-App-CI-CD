@@ -8,23 +8,22 @@ on:
 
 jobs:
   build-and-scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # Use stable LTS runner
 
     steps:
-      # --------------------------------------------------
-      # CHECKOUT
-      # --------------------------------------------------
+      # -----------------------------
+      # CHECKOUT CODE
+      # -----------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      # --------------------------------------------------
-      # SYSTEM PACKAGES (NO grpc-proto HERE)
-      # --------------------------------------------------
+      # -----------------------------
+      # INSTALL SYSTEM DEPENDENCIES
+      # -----------------------------
       - name: Install system packages
         run: |
-          set -e
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo apt update
+          sudo apt install -y \
             build-essential \
             cmake \
             ninja-build \
@@ -32,134 +31,93 @@ jobs:
             python3-pip \
             clang-tidy \
             cppcheck \
+            protobuf-compiler \
+            grpc-compiler \
             wget \
             unzip
 
-      # --------------------------------------------------
-      # PROTOC 3.19.1 + grpc_cpp_plugin
-      # (matches your Conan protobuf, avoids ABI mismatch)
-      # --------------------------------------------------
-      - name: Install protoc 3.19.1 + gRPC C++ plugin
-        run: |
-          set -e
-          PROTOC_VERSION=3.19.1
-
-          echo "=== Installing protoc ${PROTOC_VERSION} ==="
-          wget -q \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip" \
-            -O protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local
-          rm protoc.zip
-
-          echo "=== Installing grpc_cpp_plugin from distro (protobuf-compiler-grpc) ==="
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y protobuf-compiler-grpc
-
-          echo "=== Versions ==="
-          which protoc
-          protoc --version
-          which grpc_cpp_plugin
-
-      # --------------------------------------------------
-      # CONAN (PINNED, TO AVOID PyYAML ISSUES)
-      # --------------------------------------------------
+      # -----------------------------
+      # INSTALL CONAN 1.x + FIX PyYAML
+      # -----------------------------
       - name: Install Conan 1.x
         run: |
-          set -e
-          python3 -m pip install --upgrade pip
-          # PyYAML pinned as you had it
-          python3 -m pip install "PyYAML==5.4.1"
-          python3 -m pip install "conan==1.60.0"
-          conan --version
-          conan config init || true
+          python3 -m pip install --upgrade pip wheel
+          python3 -m pip install "PyYAML==6.0.2" "conan==1.60.0"
+
+          # Configure Conan
+          conan config init
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
+          conan --version
 
-      - name: Conan install (C++ dependencies)
+      # -----------------------------
+      # CONAN INSTALL
+      # -----------------------------
+      - name: Run Conan Install
         run: |
-          set -e
           mkdir -p build
           conan install . --install-folder=build --build=missing
 
-      # --------------------------------------------------
-      # CMAKE CONFIGURE (for build + clang-tidy + cppcheck)
-      # --------------------------------------------------
-      - name: Configure CMake
+      # -----------------------------
+      # CONFIGURE CMAKE
+      # -----------------------------
+      - name: CMake configure
         run: |
-          set -e
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      # --------------------------------------------------
-      # CLANG-TIDY (still in the pipeline)
-      # --------------------------------------------------
-      - name: Run clang-tidy
+      # -----------------------------
+      # BUILD PROJECT
+      # -----------------------------
+      - name: Build project
         run: |
-          set -e
-          # Adjust the paths set here if needed
-          SRC_FILES=$(find sdk examples -name "*.cpp")
-          if [ -n "$SRC_FILES" ]; then
-            clang-tidy -p build $SRC_FILES
-          else
-            echo "No C++ files found for clang-tidy."
-          fi
+          cmake --build build --config Release
 
-      # --------------------------------------------------
-      # BUILD (uses your existing build.sh so it matches
-      # what you do in the dev container)
-      # --------------------------------------------------
-      - name: Build SDK + apps
-        run: |
-          set -e
-          bash build.sh
-
-      # --------------------------------------------------
-      # CPPCHECK AFTER BUILD (USES compile_commands.json)
-      # Fixes missingInclude & runs with real include paths
-      # --------------------------------------------------
+      # -----------------------------
+      # STATIC ANALYSIS: CPPCHECK
+      # -----------------------------
+      # Must run AFTER build so compile_commands.json is present
+      # Fixes missing include-path errors
       - name: Run cppcheck
         run: |
-          set -e
-          if [ ! -f build/compile_commands.json ]; then
-            echo "compile_commands.json not found, re-configuring CMake"
-            cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          fi
-
           cppcheck \
             --project=build/compile_commands.json \
             --enable=all \
             --inconclusive \
-            --suppress=missingIncludeSystem \
             --error-exitcode=1
 
-      # --------------------------------------------------
-      # UNIT TESTS
-      # --------------------------------------------------
-      - name: Run unit tests
+      # -----------------------------
+      # STATIC ANALYSIS: CLANG-TIDY
+      # -----------------------------
+      - name: Run clang-tidy
         run: |
-          set -e
-          if [ -x ".scripts/run_unit_tests.sh" ]; then
-            bash .scripts/run_unit_tests.sh
-          else
-            ctest --test-dir build --output-on-failure
-          fi
+          clang-tidy -p build $(find sdk examples -name "*.cpp")
 
-      # --------------------------------------------------
-      # DOCKER BUILD
-      # --------------------------------------------------
-      - name: Build Docker image
+      # -----------------------------
+      # RUN UNIT TESTS
+      # -----------------------------
+      - name: Run Unit Tests
         run: |
-          set -e
+          ctest --test-dir build --output-on-failure
+
+      # -----------------------------
+      # DOCKER BUILD
+      # -----------------------------
+      - name: Build Docker Image
+        run: |
           docker build -t vehicle-app:latest .
 
-      # --------------------------------------------------
-      # TRIVY IMAGE SCAN (uses a valid action tag)
-      # --------------------------------------------------
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.32.0
-        with:
-          image-ref: vehicle-app:latest
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
+      # -----------------------------
+      # INSTALL TRIVY (STABLE VERSION)
+      # -----------------------------
+      - name: Install Trivy
+        run: |
+          wget https://github.com/aquasecurity/trivy/releases/download/v0.45.0/trivy_0.45.0_Linux-64bit.deb
+          sudo dpkg -i trivy_0.45.0_Linux-64bit.deb
+
+      # -----------------------------
+      # TRIVY SCAN
+      # -----------------------------
+      - name: Security Scan with Trivy
+        run: |
+          trivy image --exit-code 1 vehicle-app:latest
