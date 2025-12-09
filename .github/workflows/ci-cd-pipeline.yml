@@ -42,7 +42,7 @@ jobs:
       # -----------------------------
       - name: Install protoc + gRPC C++ plugin
         run: |
-          PROTOC_VERSION=3.21.12
+          PROTOC_VERSION=3.19.6
 
           echo "=== INSTALLING PROTOC ==="
           wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
@@ -52,10 +52,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler-grpc
 
-          echo "=== VERIFY ==="
-          which protoc
+          echo "=== VERIFY INSTALL ==="
           protoc --version
+          which protoc
           which grpc_cpp_plugin
+
 
       # -----------------------------
       # INSTALL CONAN (PINNED, NO PyYAML FAILURE)
