@@ -61,7 +61,7 @@ jobs:
       run: |
         pip3 install --upgrade pip setuptools wheel
         # PyYAML pinned to avoid Cython build failure on Python 3.12
-        pip3 install "PyYAML==6.0.1"
+        pip3 install "PyYAML>=6.0.2"
         pip3 install "conan==1.60.0"
 
         conan --version
