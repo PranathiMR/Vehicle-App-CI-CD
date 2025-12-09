@@ -2,137 +2,163 @@ name: Vehicle App - CI Pipeline (Phase 1)
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 jobs:
   build-and-scan:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------------------------------
+      # 1. Checkout
+      # -------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # -----------------------------
-      # SYSTEM DEPENDENCIES
-      # -----------------------------
+      # -------------------------------------------------
+      # 2. Set up Python (for Conan). Use 3.11 so PyYAML
+      #    wheels are available and we avoid the Cython
+      #    build error you saw.
+      # -------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -------------------------------------------------
+      # 3. System dependencies
+      #    - protobuf-compiler-grpc brings grpc_cpp_plugin
+      #      (we still override protoc via Conan).
+      # -------------------------------------------------
       - name: Install system packages
         run: |
-          sudo apt update
-          sudo apt install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             build-essential \
             cmake \
             ninja-build \
             pkg-config \
-            python3-pip \
+            python3-dev \
             clang-tidy \
             cppcheck \
             wget \
-            unzip
+            unzip \
+            protobuf-compiler-grpc \
+            docker.io
 
-      # -----------------------------
-      # INSTALL PROTOC 3.19.1
-      # -----------------------------
-      - name: Install protoc 3.19.1
+      # -------------------------------------------------
+      # 4. Conan 1.60 (same as your dev container)
+      # -------------------------------------------------
+      - name: Install Conan 1.x
         run: |
-          PROTOC_VERSION=3.19.1
-
-          echo ">>> Downloading protoc ${PROTOC_VERSION}"
-          wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
-
-          echo ">>> Unpacking into /usr/local"
-          sudo unzip -o protoc.zip -d /usr/local
-
-          echo ">>> Fixing permissions"
-          sudo chmod +x /usr/local/bin/protoc
-
-          echo ">>> Checking version"
-          ls -l /usr/local/bin/protoc
-          protoc --version
-
-
-      # -----------------------------
-      # INSTALL CONAN 1.x
-      # -----------------------------
-      - name: Install Conan
-        run: |
-          pip3 install --upgrade pip
-          pip3 install "conan==1.60.0"
+          pip install --upgrade pip
+          pip install "conan==1.60.0"
+          conan --version
+          # Create default profile matching the runner
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
 
-      # OPTIONAL: Add Velocitas remotes if needed
-      - name: Add Conan remote
-        run: conan remote add velocitas https://packages.automotive.microfocus.com/artifactory/api/conan/conan-velocitas --force || true
-
-      # -----------------------------
-      # CONAN INSTALL
-      # -----------------------------
-      - name: Run Conan Install
+      # -------------------------------------------------
+      # 5. Conan install for sdk (uses your conanfile.txt)
+      #    This also downloads protobuf/3.19.1 & grpc/1.50.1
+      #    and we expose protoc from that package on PATH
+      #    for the rest of the job.
+      # -------------------------------------------------
+      - name: Conan install
         run: |
-          mkdir -p build
-          conan install . -if build -b missing
+          # Resolve and build all third-party deps
+          conan install . --build=missing
 
-      # -----------------------------
-      # USE grpc_cpp_plugin FROM CONAN
-      # -----------------------------
-      - name: Configure grpc_cpp_plugin
-        run: |
-          plugin=$(find ~/.conan/data/grpc/*/*/*/package/*/bin/grpc_cpp_plugin | head -n 1)
-          sudo ln -sf "$plugin" /usr/local/bin/grpc_cpp_plugin
-          grpc_cpp_plugin --version || true
+          # Expose the protobuf tools from Conan for later steps
+          PROTO_BIN=$(echo "$HOME/.conan/data/protobuf/3.19.1/_/_/package"/*"/bin")
+          echo "PROTOBUF_BIN=$PROTO_BIN" >> "$GITHUB_ENV"
+          echo "PATH=$PROTO_BIN:$PATH" >> "$GITHUB_ENV"
 
-      # -----------------------------
-      # STATIC ANALYSIS
-      # -----------------------------
+      # -------------------------------------------------
+      # 6. Static analysis – cppcheck
+      # -------------------------------------------------
       - name: Run cppcheck
-        run: cppcheck --enable=all --inconclusive --error-exitcode=1 sdk examples
-
-      - name: Run clang-tidy
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          clang-tidy -p build $(find sdk examples -name "*.cpp")
+          echo ">>> Running cppcheck on sdk/ and examples/"
+          cppcheck --enable=all --inconclusive --error-exitcode=1 \
+            sdk examples
 
-      # -----------------------------
-      # PREPARE gRPC OUTPUT DIR
-      # -----------------------------
-      - name: Create gRPC generation folder
-        run: mkdir -p build/gens
-
-      # -----------------------------
-      # BUILD PROJECT
-      # -----------------------------
-      - name: Build SDK + Apps
+      # -------------------------------------------------
+      # 7. Configure with CMake (Ninja generator)
+      #    -DCMAKE_EXPORT_COMPILE_COMMANDS gives us
+      #    compile_commands.json for clang-tidy.
+      # -------------------------------------------------
+      - name: Configure CMake
         run: |
           cmake -S . -B build -G Ninja \
-            -D_gRPC_PROTOBUF_PROTOC_EXECUTABLE=/usr/local/bin/protoc \
-            -D_gRPC_CPP_PLUGIN_EXECUTABLE=/usr/local/bin/grpc_cpp_plugin
-          
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      # -------------------------------------------------
+      # 8. Static analysis – clang-tidy
+      #    Uses compile_commands.json generated in step 7.
+      # -------------------------------------------------
+      - name: Run clang-tidy
+        run: |
+          echo ">>> Running clang-tidy"
+          SRC_FILES=$(find sdk examples -name "*.cpp")
+          if [ -n "$SRC_FILES" ]; then
+            clang-tidy -p build $SRC_FILES
+          else
+            echo "No *.cpp files found for clang-tidy"
+          fi
+
+      # -------------------------------------------------
+      # 9. Make sure protoc gens directory exists.
+      #    This avoids the 'build/gens/...: not found'
+      #    errors you hit earlier.
+      # -------------------------------------------------
+      - name: Create protoc generation folder
+        run: mkdir -p build/gens
+
+      # -------------------------------------------------
+      # 10. Build (SDK + examples + tests)
+      #     This is equivalent to what you do locally
+      #     with your dev container.
+      # -------------------------------------------------
+      - name: Build project
+        run: |
           cmake --build build --config Release
 
-      # -----------------------------
-      # RUN UNIT TESTS
-      # -----------------------------
-      - name: Run Unit Tests
-        run: ctest --test-dir build --output-on-failure
+      # -------------------------------------------------
+      # 11. Run unit tests
+      #     If you prefer your script, replace this with:
+      #       bash .scripts/run_unit_tests.sh
+      # -------------------------------------------------
+      - name: Run unit tests
+        run: |
+          ctest --test-dir build --output-on-failure
 
-      # -----------------------------
-      # DOCKER BUILD
-      # -----------------------------
-      - name: Build Docker Image
-        run: docker build -t vehicle-app:latest .
+      # -------------------------------------------------
+      # 12. Build Docker image for the app
+      #     (assumes you have a Dockerfile in repo root).
+      # -------------------------------------------------
+      - name: Build Docker image
+        run: |
+          echo ">>> Building Docker image vehicle-app:latest"
+          docker build -t vehicle-app:latest .
 
-      # -----------------------------
-      # INSTALL TRIVY
-      # -----------------------------
+      # -------------------------------------------------
+      # 13. Install Trivy (for image vulnerability scan)
+      # -------------------------------------------------
       - name: Install Trivy
         run: |
           wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.3_Linux-64bit.deb
           sudo dpkg -i trivy_0.48.3_Linux-64bit.deb
 
-      # -----------------------------
-      # TRIVY SCAN
-      # -----------------------------
-      - name: Security Scan with Trivy
-        run: trivy image --exit-code 1 vehicle-app:latest
+      # -------------------------------------------------
+      # 14. Trivy image scan
+      #     --exit-code 1 causes the pipeline to fail on
+      #     HIGH/CRITICAL vulnerabilities by default.
+      # -------------------------------------------------
+      - name: Security scan with Trivy
+        run: |
+          echo ">>> Scanning Docker image with Trivy"
+          trivy image --exit-code 1 vehicle-app:latest
