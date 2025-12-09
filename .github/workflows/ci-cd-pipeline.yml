@@ -37,9 +37,20 @@ jobs:
       - name: Install protoc 3.19.1
         run: |
           PROTOC_VERSION=3.19.1
+
+          echo ">>> Downloading protoc ${PROTOC_VERSION}"
           wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
+
+          echo ">>> Unpacking into /usr/local"
           sudo unzip -o protoc.zip -d /usr/local
+
+          echo ">>> Fixing permissions"
+          sudo chmod +x /usr/local/bin/protoc
+
+          echo ">>> Checking version"
+          ls -l /usr/local/bin/protoc
           protoc --version
+
 
       # -----------------------------
       # INSTALL CONAN 1.x
