@@ -11,14 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # -----------------------------
-      # CHECKOUT CODE
-      # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
       # -----------------------------
-      # INSTALL SYSTEM DEPENDENCIES
+      # SYSTEM DEPENDENCIES
       # -----------------------------
       - name: Install system packages
         run: |
@@ -35,28 +32,14 @@ jobs:
             unzip
 
       # -----------------------------
-      # INSTALL PROTOBUF & gRPC C++ COMPILER
+      # INSTALL PROTOC 3.19.1
       # -----------------------------
-      - name: Install protoc + grpc_cpp_plugin
+      - name: Install protoc 3.19.1
         run: |
-          PROTOC_VERSION=3.21.12
-          GRPC_VERSION=1.50.1
-
-          echo ">>> Installing protoc"
-          wget https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip
-          unzip protoc-$PROTOC_VERSION-linux-x86_64.zip -d protoc
-          sudo mv protoc/bin/* /usr/local/bin/
-          sudo mv protoc/include/* /usr/local/include/
-
-          echo ">>> Installing gRPC C++ tools"
-          wget https://github.com/grpc/grpc/releases/download/v$GRPC_VERSION/grpc-$GRPC_VERSION.tar.gz
-          tar -xzf grpc-$GRPC_VERSION.tar.gz
-          cd grpc-$GRPC_VERSION
-          mkdir -p cmake/build && cd cmake/build
-          cmake ../.. -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF
-          make -j4
-          sudo make install
-          sudo ldconfig
+          PROTOC_VERSION=3.19.1
+          wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -O protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local
+          protoc --version
 
       # -----------------------------
       # INSTALL CONAN 1.x
@@ -68,33 +51,42 @@ jobs:
           conan profile new default --detect --force
           conan profile update settings.compiler.libcxx=libstdc++11 default
 
+      # OPTIONAL: Add Velocitas remotes if needed
+      - name: Add Conan remote
+        run: conan remote add velocitas https://packages.automotive.microfocus.com/artifactory/api/conan/conan-velocitas --force || true
+
       # -----------------------------
       # CONAN INSTALL
       # -----------------------------
       - name: Run Conan Install
         run: |
           mkdir -p build
-          conan install . --install-folder=build --build=missing
+          conan install . -if build -b missing
 
       # -----------------------------
-      # STATIC ANALYSIS: CPPCHECK
+      # USE grpc_cpp_plugin FROM CONAN
+      # -----------------------------
+      - name: Configure grpc_cpp_plugin
+        run: |
+          plugin=$(find ~/.conan/data/grpc/*/*/*/package/*/bin/grpc_cpp_plugin | head -n 1)
+          sudo ln -sf "$plugin" /usr/local/bin/grpc_cpp_plugin
+          grpc_cpp_plugin --version || true
+
+      # -----------------------------
+      # STATIC ANALYSIS
       # -----------------------------
       - name: Run cppcheck
-        run: |
-          cppcheck --enable=all --inconclusive --error-exitcode=1 sdk examples
+        run: cppcheck --enable=all --inconclusive --error-exitcode=1 sdk examples
 
-      # -----------------------------
-      # STATIC ANALYSIS: CLANG-TIDY
-      # -----------------------------
       - name: Run clang-tidy
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           clang-tidy -p build $(find sdk examples -name "*.cpp")
 
       # -----------------------------
-      # PRE-CREATE gRPC gens FOLDER (IMPORTANT FIX)
+      # PREPARE gRPC OUTPUT DIR
       # -----------------------------
-      - name: Create protoc generation folder
+      - name: Create gRPC generation folder
         run: mkdir -p build/gens
 
       # -----------------------------
@@ -102,21 +94,23 @@ jobs:
       # -----------------------------
       - name: Build SDK + Apps
         run: |
+          cmake -S . -B build -G Ninja \
+            -D_gRPC_PROTOBUF_PROTOC_EXECUTABLE=/usr/local/bin/protoc \
+            -D_gRPC_CPP_PLUGIN_EXECUTABLE=/usr/local/bin/grpc_cpp_plugin
+          
           cmake --build build --config Release
 
       # -----------------------------
       # RUN UNIT TESTS
       # -----------------------------
       - name: Run Unit Tests
-        run: |
-          ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure
 
       # -----------------------------
       # DOCKER BUILD
       # -----------------------------
       - name: Build Docker Image
-        run: |
-          docker build -t vehicle-app:latest .
+        run: docker build -t vehicle-app:latest .
 
       # -----------------------------
       # INSTALL TRIVY
@@ -130,5 +124,4 @@ jobs:
       # TRIVY SCAN
       # -----------------------------
       - name: Security Scan with Trivy
-        run: |
-          trivy image --exit-code 1 vehicle-app:latest
+        run: trivy image --exit-code 1 vehicle-app:latest
