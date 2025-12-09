@@ -52,16 +52,16 @@ jobs:
 
 
     # -----------------------------
-    # INSTALL CONAN 1.x (FIXED PyYAML)
+    # INSTALL CONAN
     # -----------------------------
-    - name: Install Conan 1.x
+    - name: Install Conan via APT
       run: |
-        pip install --upgrade pip
-        pip install PyYAML==6.0.1 --only-binary=:all:
-        pip install "conan==1.60.0"
-        conan config init
+        sudo add-apt-repository ppa:conan/stable -y
+        sudo apt update
+        sudo apt install -y conan
         conan profile new default --detect --force
         conan profile update settings.compiler.libcxx=libstdc++11 default
+
 
 
     # -----------------------------
