@@ -35,34 +35,31 @@ jobs:
           unzip
 
     # -----------------------------
-    # INSTALL PROTOBUF + gRPC COMPILER (CORRECT)
+    # INSTALL PROTOBUF + gRPC COMPILER (FIXED)
     # -----------------------------
     - name: Install Protobuf + gRPC C++ plugin
       run: |
         sudo apt update
         sudo apt install -y \
           protobuf-compiler \
-          protobuf-compiler-grpc \
-          libgrpc++-dev \
-          libprotobuf-dev
+          grpc-tools \
+          libprotobuf-dev \
+          libgrpc-dev
 
         echo "=== Versions ==="
         protoc --version
         which grpc_cpp_plugin
 
-
     # -----------------------------
-    # INSTALL CONAN
+    # INSTALL CONAN (FIXED — NO PYTHON BUILD ERRORS)
     # -----------------------------
-    - name: Install Conan via APT
+    - name: Install Conan
       run: |
-        sudo add-apt-repository ppa:conan/stable -y
-        sudo apt update
-        sudo apt install -y conan
+        pipx install conan==1.60.0
+        pipx ensurepath
+        conan --version
         conan profile new default --detect --force
         conan profile update settings.compiler.libcxx=libstdc++11 default
-
-
 
     # -----------------------------
     # CONAN INSTALL
