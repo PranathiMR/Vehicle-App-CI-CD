@@ -57,28 +57,26 @@ jobs:
     # -----------------------------
 # INSTALL CONAN 1.x (WORKING FIX)
 # -----------------------------
-    - name: Install Conan (APT official repo)
+    # -----------------------------
+# INSTALL CONAN 1.x (NO PyYAML BUILD ERRORS)
+# -----------------------------
+    - name: Install Conan 1.x
       run: |
-        sudo apt update
-        sudo apt install -y apt-transport-https ca-certificates gnupg software-properties-common
+        pip install --upgrade pip wheel setuptools
 
-        # Add official Conan APT repo key
-        sudo mkdir -p /etc/apt/keyrings
-        curl -fsSL https://downloads.conan.io/keys/conan.gpg \
-          | sudo gpg --dearmor -o /etc/apt/keyrings/conan.gpg
+        # Install PyYAML from wheel BEFORE Conan triggers it
+        pip install --only-binary=:all: "PyYAML>=6.0"
 
-        # Add official Conan repo source
-        echo "deb [signed-by=/etc/apt/keyrings/conan.gpg] https://downloads.conan.io/apt stable main" \
-          | sudo tee /etc/apt/sources.list.d/conan.list
+        # Install Conan using pipx to isolate from system Python
+        python3 -m pip install pipx
+        pipx ensurepath
+        pipx install "conan==1.60.0"
 
-        sudo apt update
-        sudo apt install -y conan
-
-        # Initialize Conan profile
         conan profile new default --detect --force
         conan profile update settings.compiler.libcxx=libstdc++11 default
 
         conan --version
+
 
 # -----------------------------
 # CONAN INSTALL
