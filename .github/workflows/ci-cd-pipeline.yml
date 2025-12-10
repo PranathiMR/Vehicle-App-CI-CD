@@ -42,13 +42,15 @@ jobs:
         sudo apt update
         sudo apt install -y \
           protobuf-compiler \
-          grpc-tools \
           libprotobuf-dev \
           libgrpc-dev
+
+        pip install grpcio grpcio-tools
 
         echo "=== Versions ==="
         protoc --version
         which grpc_cpp_plugin
+
 
     # -----------------------------
     # INSTALL CONAN (FIXED — NO PYTHON BUILD ERRORS)
