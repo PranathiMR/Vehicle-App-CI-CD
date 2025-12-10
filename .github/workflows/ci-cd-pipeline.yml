@@ -50,14 +50,14 @@ jobs:
         which grpc_cpp_plugin
         grpc_cpp_plugin --version || true
 
+    - name: Remove pipx Conan
+      run: |
+        pipx uninstall conan || true
 
-    # -----------------------------
-    # INSTALL CONAN (FIXED — NO PYTHON BUILD ERRORS)
-    # -----------------------------
-    # -----------------------------
-# INSTALL CONAN 1.x (WORKING FIX)
+
+
+
 # -----------------------------
-    # -----------------------------
 # INSTALL CONAN 1.x (NO PyYAML BUILD ERRORS)
 # -----------------------------
     - name: Install Conan 1.x
