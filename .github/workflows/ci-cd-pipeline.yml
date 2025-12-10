@@ -54,17 +54,35 @@ jobs:
     # -----------------------------
     # INSTALL CONAN (FIXED — NO PYTHON BUILD ERRORS)
     # -----------------------------
-    - name: Install Conan
+    # -----------------------------
+# INSTALL CONAN 1.x (WORKING FIX)
+# -----------------------------
+    - name: Install Conan (APT official repo)
       run: |
-        pipx install conan==1.60.0
-        pipx ensurepath
-        conan --version
+        sudo apt update
+        sudo apt install -y apt-transport-https ca-certificates gnupg software-properties-common
+
+        # Add official Conan APT repo key
+        sudo mkdir -p /etc/apt/keyrings
+        curl -fsSL https://downloads.conan.io/keys/conan.gpg \
+          | sudo gpg --dearmor -o /etc/apt/keyrings/conan.gpg
+
+        # Add official Conan repo source
+        echo "deb [signed-by=/etc/apt/keyrings/conan.gpg] https://downloads.conan.io/apt stable main" \
+          | sudo tee /etc/apt/sources.list.d/conan.list
+
+        sudo apt update
+        sudo apt install -y conan
+
+        # Initialize Conan profile
         conan profile new default --detect --force
         conan profile update settings.compiler.libcxx=libstdc++11 default
 
-    # -----------------------------
-    # CONAN INSTALL
-    # -----------------------------
+        conan --version
+
+# -----------------------------
+# CONAN INSTALL
+# -----------------------------
     - name: Run Conan Install
       run: |
         mkdir -p build
